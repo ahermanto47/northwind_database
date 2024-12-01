@@ -27,7 +27,8 @@ get_table_info_from_db() {
 
     cat > input.sql << EOM
 :setvar SQLCMDERRORLEVEL 1
-USE DEV;
+USE DEV
+GO
 SET NOCOUNT ON
 GO
 SELECT 
@@ -37,7 +38,8 @@ SELECT
 FROM sys.columns AS c
 INNER JOIN sys.tables AS t ON t.object_id = c.object_id
 INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-WHERE s.name = '$1' and t.name = '$2';
+WHERE s.name = '$1' and t.name = '$2'
+GO
 EOM
 
     call_sqlcmd
