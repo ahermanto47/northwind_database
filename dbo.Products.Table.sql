@@ -1,4 +1,4 @@
-USE [DEV]
+﻿USE [DEV]
 GO
 /****** Object:  Table [dbo].[Products]    Script Date: 11/30/2024 6:46:00 PM ******/
 SET ANSI_NULLS ON
@@ -16,6 +16,7 @@ CREATE TABLE [dbo].[Products](
 	[UnitsOnOrder] [smallint] NULL,
 	[ReorderLevel] [smallint] NULL,
 	[Discontinued] [bit] NOT NULL,
+	[Warehouse] [int] NULL,
  CONSTRAINT [PK_Products] PRIMARY KEY CLUSTERED 
 (
 	[ProductID] ASC
