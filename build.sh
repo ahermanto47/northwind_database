@@ -126,7 +126,7 @@ generate_alter_statement() {
     echo "$ALTER_STATEMENT" >> database.sql
 
     if [ "$diff_action" == "a" ]; then
-        ADD_COLUMN_TMP=$(echo "ADD COLUMN "$object_change)
+        ADD_COLUMN_TMP=$(echo "ADD "$object_change)
         ADD_COLUMN=$(echo "$ADD_COLUMN_TMP" | sed -e 's/,//g')
         echo "$ADD_COLUMN" >> database.sql
     fi
