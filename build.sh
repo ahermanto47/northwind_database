@@ -113,6 +113,29 @@ find_difference_v2() {
 
 }
 
+generate_alter_statement() {
+
+    IFS='>' read -ra OBJECT <<< $(echo $3 | tr "\n" ",")
+    diff_result="${OBJECT[0]}"
+    object_change="${OBJECT[1]}"
+
+    read diff_action <<< $(echo $diff_result | awk '{split($0, a, "[0-9]+"); print a[2]}')
+    read db_line repo_line <<< $(echo $diff_result | awk '{split($0, a, "[^0-9]+"); print a[1], a[2]}')
+
+    ALTER_STATEMENT=$(echo "ALTER TABLE "$1.$2)
+    echo "$ALTER_STATEMENT" >> database.sql
+
+    if [ "$diff_action" == "a" ]; then
+        ADD_COLUMN_TMP=$(echo "ADD COLUMN "$object_change)
+        ADD_COLUMN=$(echo "$ADD_COLUMN_TMP" | sed -e 's/,//g')
+        echo "$ADD_COLUMN" >> database.sql
+    fi
+        
+    echo "GO" >> database.sql
+
+}
+
+
 # mode can be full or delta
 # debug can be 1 or 0
 while getopts ":d:m:" opt; do
@@ -167,6 +190,11 @@ do
             echo "---------------------------------------------------------"
 
             # generate alter statement
+            if [ -z "$diff_result" ]; then
+                echo "No difference"
+            else
+                generate_alter_statement $object_schema $object_name "$diff_result"
+            fi
         
         # then we get view info from db
             
