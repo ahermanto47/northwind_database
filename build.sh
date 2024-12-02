@@ -23,34 +23,6 @@ call_sqlcmd_v2() {
 
 }
 
-# get_table_info_from_db() {
-
-#     cat > input.sql << EOM
-# :setvar SQLCMDERRORLEVEL 1
-# USE DEV
-# GO
-# SET NOCOUNT ON
-# GO
-# SELECT 
-#    CONCAT(
-#    '[' , c.name, '] ',
-#    '[', p.name, ']' ,
-#    case when p.name in ('nvarchar') then CONCAT('(' , p.precision, ') ') else ' ' end,
-#    case when c.is_identity = 1 then 'IDENTITY(1,1) ' else '' end,
-#    case when c.is_nullable = 1 then 'NULL,' else 'NOT NULL,' end 
-#    )
-# FROM sys.columns AS c
-# INNER JOIN sys.tables AS t ON t.object_id = c.object_id
-# INNER JOIN sys.schemas AS s ON s.schema_id = t.schema_id
-# INNER JOIN sys.types AS p ON p.user_type_id = c.user_type_id
-# WHERE s.name = '$1' and t.name = '$2'
-# GO
-# EOM
-
-#     call_sqlcmd
-
-# }
-
 get_table_info_from_db_v3() {
 
     cat > input.sql << EOM
@@ -85,24 +57,10 @@ EOM
 
 }
 
-get_table_info_from_file() {
-
-    result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
-    echo "$result"
-
-}
-
 get_table_info_from_file_v2() {
 
     result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
     echo "$result" > file2
-
-}
-
-find_difference() {
-
-    result=$(diff -b <(echo "$1") <(echo "$2"))
-    echo "$result"
 
 }
 
@@ -115,20 +73,34 @@ find_difference_v2() {
 
 generate_alter_statement() {
 
-    IFS='>' read -ra OBJECT <<< $(echo $3 | tr "\n" ",")
-    diff_result="${OBJECT[0]}"
+    IFS=',' read -ra OBJECT <<< "$3"
+    diff_action_result="${OBJECT[0]}"
     object_change="${OBJECT[1]}"
+    read diff_action <<< $(echo $diff_action_result | awk '{split($0, a, "[0-9]+"); print a[2]}')
+    read db_line repo_line <<< $(echo $diff_action_result | awk '{split($0, a, "[^0-9]+"); print a[1], a[2]}')
 
-    read diff_action <<< $(echo $diff_result | awk '{split($0, a, "[0-9]+"); print a[2]}')
-    read db_line repo_line <<< $(echo $diff_result | awk '{split($0, a, "[^0-9]+"); print a[1], a[2]}')
+    if [ $debug == 1 ]; then
+        echo "$diff_action_result"
+        echo "$object_change"
+        echo "$diff_action"
+        echo "$db_line"
+        echo "$repo_line"
+    fi
 
     ALTER_STATEMENT=$(echo "ALTER TABLE "$1.$2)
     echo "$ALTER_STATEMENT" >> database.sql
 
     if [ "$diff_action" == "a" ]; then
-        ADD_COLUMN_TMP=$(echo "ADD "$object_change)
-        ADD_COLUMN=$(echo "$ADD_COLUMN_TMP" | sed -e 's/,//g')
-        echo "$ADD_COLUMN" >> database.sql
+        MODIFY_COLUMN=$(echo "ADD "$object_change)
+        echo "$MODIFY_COLUMN" >> database.sql
+    elif [ "$diff_action" == "d" ]; then 
+        IFS=' ' read -ra OBJECT <<< "$object_change"
+        DROP_COLUMN=$(echo "${OBJECT[0]}")
+        MODIFY_COLUMN=$(echo "DROP COLUMN "$DROP_COLUMN)
+        echo "$MODIFY_COLUMN" >> database.sql
+    elif [ "$diff_action" == "c" ]; then
+        # todo 
+        echo "NOP"
     fi
         
     echo "GO" >> database.sql
@@ -175,8 +147,10 @@ do
         # first we get table info from db
         if [ "$object_type" == "Table" ]; then
 
-            echo "$object_name"
-            echo "---------------------------------------------------------"
+            if [ $debug == 1 ]; then
+                echo "$object_name"
+                echo "---------------------------------------------------------"
+            fi
 
             # get table info from db
             get_table_info_from_db_v3 "$object_schema" "$object_name"
@@ -186,14 +160,19 @@ do
 
             # find the difference
             diff_result=$(find_difference_v2 $db_result $file_result)
-            echo "$diff_result"
-            echo "---------------------------------------------------------"
+
+            if [ $debug == 1 ]; then
+                echo "$diff_result"
+                echo "---------------------------------------------------------"
+            fi
 
             # generate alter statement
             if [ -z "$diff_result" ]; then
                 echo "No difference"
             else
-                generate_alter_statement $object_schema $object_name "$diff_result"
+                diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
+                echo "$diffs"
+                generate_alter_statement $object_schema $object_name "$diffs"
             fi
         
         # then we get view info from db
