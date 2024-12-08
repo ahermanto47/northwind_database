@@ -6,11 +6,11 @@ get_object_info_from_filename() {
 
     IFS='.' read -ra OBJECT <<< "$1"
 
-    if [ "$2" == "schema" ]; then
+    if [ "$2" = "schema" ]; then
         echo "${OBJECT[0]}"
-    elif [ "$2" == "name" ]; then
+    elif [ "$2" = "name" ]; then
         echo "${OBJECT[1]}"
-    elif [ "$2" == "type" ]; then
+    elif [ "$2" = "type" ]; then
         echo "${OBJECT[2]}"
     fi
 
@@ -26,7 +26,6 @@ call_sqlcmd() {
         echo "$result"  > current_index_in_db
         echo "$result"  | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_db
     fi
-
 
 }
 
@@ -119,16 +118,32 @@ EOM
 
 get_table_index_info_from_file() {
 
-    result=$(sed -n '/CONSTRAINT/{/NONCLUSTERED/q; p; :loop n; p; /WITH/q; b loop}' "$1" | tr '\n' ' ' )
-    echo "$result" | grep -oP -m 1 '(\[[a-zA-Z_]+\])' > index_name
-    echo "$result" | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_repo
+    if [ "$2" = "repo" ]; then
+        result=$(sed -n '/CONSTRAINT/{/NONCLUSTERED/q; p; :loop n; p; /WITH/q; b loop}' "$1" | tr '\n' ' ' )
+        echo "$result" | grep -oP -m 1 '(\[[a-zA-Z_]+\])' > index_name
+        echo "$result" | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_repo
+    elif [ "$2" = "dir" ]; then
+        result=$(sed -n '/CONSTRAINT/{/NONCLUSTERED/q; p; :loop n; p; /WITH/q; b loop}' "$1" | tr '\n' ' ' )
+        echo "$result" | grep -oP -m 1 '(\[[a-zA-Z_]+\])' > index_name
+        echo "$result" | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_db
+    fi
 
 }
 
 get_table_column_info_from_file() {
 
-    result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
-    echo "$result" > file_from_repo
+    if [ "$2" = "repo" ]; then
+
+        result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
+        echo "$result" > file_from_repo
+    
+    elif [ "$2" = "dir" ]; then
+
+        result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
+        # result=$(sed -n '/CREATE/{p; :loop n; p; /CONSTRAINT/q; b loop}' "$1" | sed '1d;$d'| sed -e 's/^\s*//')
+        echo "$result" > file_from_db
+
+    fi
 
 }
 
@@ -143,6 +158,7 @@ find_difference() {
     fi
 
     rm file_from_db file_from_repo
+
 }
 
 generate_alter_statement() {
@@ -153,7 +169,7 @@ generate_alter_statement() {
     read diff_action <<< $(echo $diff_action_result | awk '{split($0, a, "[0-9]+"); print a[2]}')
     read db_line repo_line <<< $(echo $diff_action_result | awk '{split($0, a, "[^0-9]+"); print a[1], a[2]}')
 
-    if [ $debug == 1 ]; then
+    if [ $debug = 1 ]; then
         echo "$diff_action_result"
         echo "$object_change"
         echo "$diff_action"
@@ -165,40 +181,41 @@ generate_alter_statement() {
         ALTER_STATEMENT=$(echo "ALTER TABLE [$1].[$2]")
         echo "$ALTER_STATEMENT" >> database.sql 2>&1
 
-        if [ "$diff_action" == "a" ]; then
+        if [ "$diff_action" = "a" ]; then
             MODIFY_COLUMN=$(echo "ADD "$object_change)
             echo "$MODIFY_COLUMN" >> database.sql 2>&1
-        elif [ "$diff_action" == "d" ]; then 
+        elif [ "$diff_action" = "d" ]; then 
             IFS=' ' read -ra OBJECT <<< "$object_change"
             DROP_COLUMN=$(echo "${OBJECT[0]}")
             MODIFY_COLUMN=$(echo "DROP COLUMN "$DROP_COLUMN)
             echo "$MODIFY_COLUMN" >> database.sql 2>&1
-        elif [ "$diff_action" == "c" ]; then
+        elif [ "$diff_action" = "c" ]; then
             # todo 
             echo "NOP"
         fi
     elif [ "$4" = "index" ]; then
         ALTER_STATEMENT=$(echo "ALTER TABLE [$1].[$2] DROP CONSTRAINT $5 WITH ( ONLINE = OFF )")
         echo "$ALTER_STATEMENT" >> database.sql 2>&1
+        echo "GO" >> database.sql 2>&1
 
-        if [ "$diff_action" == "a" ]; then
+        if [ "$diff_action" = "a" ]; then
             # todo 
             echo "NOP"
-        elif [ "$diff_action" == "d" ]; then 
+        elif [ "$diff_action" = "d" ]; then 
             CURRENT_INDEX=$(cat current_index_in_db)
-            if [ $debug == 1 ]; then
+            if [ $debug = 1 ]; then
                 echo "current index in db: $CURRENT_INDEX"
             fi
             index_to_be_removed=$(echo "$object_change" | awk '{$1=$1};1' | sed 's/[][\/*.]/\\&/g; s%.*%,&%')
-            if [ $debug == 1 ]; then
+            if [ $debug = 1 ]; then
                 echo "index_to_be_removed: $index_to_be_removed"
             fi
             MODIFY_INDEX=$(sed -e "s|${index_to_be_removed}||g" current_index_in_db )
-            if [ $debug == 1 ]; then
+            if [ $debug = 1 ]; then
                 echo "modified index: $MODIFY_INDEX"
             fi
             echo "ALTER TABLE [$1].[$2] ADD $MODIFY_INDEX" >> database.sql 2>&1
-        elif [ "$diff_action" == "c" ]; then
+        elif [ "$diff_action" = "c" ]; then
             # todo 
             echo "NOP"
         fi
@@ -211,12 +228,20 @@ generate_alter_statement() {
 
 # mode can be full or delta
 # debug can be 1 or 0
-# example: ./build.sh -d 1 -m delta
-while getopts ":d:m:" opt; do
+# target can be db or dir
+# source is the full path when target is dir
+# examples: 
+# ./build.sh -d 1 -m delta -t dir -s /c/users/dowload/export_db
+# ./build.sh -d 1 -m delta -t db
+while getopts ":d:m:t:s:" opt; do
   case $opt in
     d) debug="$OPTARG"
     ;;
     m) mode="$OPTARG"
+    ;;
+    t) target="$OPTARG"
+    ;;
+    s) source="$OPTARG"
     ;;
     \?) echo "Invalid option -$OPTARG" >&2
     exit 1
@@ -232,6 +257,8 @@ done
 
 printf "Argument debug is %s\n" "$debug"
 printf "Argument mode is %s\n" "$mode"
+printf "Argument target is %s\n" "$target"
+printf "Argument source is %s\n" "$source"
 
 rm -rf build
 mkdir build
@@ -240,31 +267,37 @@ cd build
 
 for file in *.sql 
 do
-    if [ "$mode" == "delta" ]; then
+    if [ "$mode" = "delta" ]; then
 
         # we find difference from repo vs actual db
         object_schema=$(get_object_info_from_filename "$file" "schema")
         object_name=$(get_object_info_from_filename "$file" "name")
         object_type=$(get_object_info_from_filename "$file" "type")
         
-        # first we get table info from db
-        if [ "$object_type" == "Table" ]; then
 
-            if [ $debug == 1 ]; then
+        # first we get table info
+        if [ "$object_type" = "Table" ]; then
+
+            if [ $debug = 1 ]; then
                 echo "---------------------------------------------------------"
                 echo "table: $object_name"
             fi
 
-            # get table column info from db
-            get_table_column_info_from_db "$object_schema" "$object_name"
+            if [ "$target" = "db" ]; then 
+                # get table column info from db
+                get_table_column_info_from_db "$object_schema" "$object_name"
+            elif [ "$target" = "dir" ]; then
+                # then we get table column info from target directory
+                get_table_column_info_from_file "$source$file" "dir"
+            fi
 
             # then we get table column info from repo
-            get_table_column_info_from_file "$file"
+            get_table_column_info_from_file "$file" "repo"
 
             # find the column difference
             diff_result=$(find_difference)
 
-            if [ $debug == 1 ]; then
+            if [ $debug = 1 ]; then
                 echo "---------------------------------------------------------"
                 echo "$diff_result"
             fi
@@ -278,15 +311,22 @@ do
                 generate_alter_statement $object_schema $object_name "$diffs" "column"
             fi
         
-            # get table index info from db
-            get_table_index_info_from_db "$object_schema" "$object_name"
+
+            if [ "$target" = "db" ]; then 
+                # get table index info from db
+                get_table_index_info_from_db "$object_schema" "$object_name"
+            elif [ "$target" = "dir" ]; then
+                # then we get table index info from target directory
+                dos2unix "$source$file"
+                get_table_index_info_from_file "$source$file" "dir"
+            fi
 
             # then we get table index info from repo
-            get_table_index_info_from_file "$file"
+            get_table_index_info_from_file "$file" "repo"
 
             # grab the index name
             index_name=$(cat index_name)
-            if [ $debug == 1 ]; then
+            if [ $debug = 1 ]; then
                 echo "index: $index_name"
                 echo "---------------------------------------------------------"
             fi
@@ -294,7 +334,7 @@ do
             # find the index difference
             diff_result=$(find_difference "ignore_space")
 
-            if [ $debug == 1 ]; then
+            if [ $debug = 1 ]; then
                 echo "$diff_result"
                 echo "---------------------------------------------------------"
             fi
@@ -308,6 +348,8 @@ do
                 generate_alter_statement $object_schema "$object_name" "$diffs" "index" $index_name
             fi
 
+            #break
+        
         # then we get view info from db
             
             # find the difference
@@ -322,22 +364,23 @@ do
 
         fi
 
-    elif [ "$mode" == "full" ]; then
+    elif [ "$mode" = "full" ]; then
 
         # we force everything from repo
-        if [[ $file == *"Table"* ]]; then
+        if [[ $file = *"Table"* ]]; then
             cat "$file" >> table.tmp
-        elif  [[ $file == *"View"* ]]; then
+        elif  [[ $file = *"View"* ]]; then
             cat "$file" >> view.tmp
-        elif  [[ $file == *"StoredProcedure"* ]]; then
+        elif  [[ $file = *"StoredProcedure"* ]]; then
             cat "$file" >> sp.tmp
         fi
 
     fi
+
 done
 
 # we do this only for full build
-if [ "$mode" == "full" ]; then
+if [ "$mode" = "full" ]; then
     for tmp in table.tmp view.tmp sp.tmp
     do
         cat $tmp >> database.sql 2>&1
