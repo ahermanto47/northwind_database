@@ -255,6 +255,11 @@ while getopts ":d:m:t:s:" opt; do
   esac
 done
 
+if [ -z "$mode" ]; then
+    printf "Missing mode parameter, exiting.."
+    exit
+fi
+
 printf "Argument debug is %s\n" "$debug"
 printf "Argument mode is %s\n" "$mode"
 printf "Argument target is %s\n" "$target"
@@ -386,3 +391,6 @@ if [ "$mode" = "full" ]; then
         cat $tmp >> database.sql 2>&1
     done
 fi
+
+# cleanup
+rm dbo.*.sql *.tmp

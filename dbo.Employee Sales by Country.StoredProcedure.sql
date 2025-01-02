@@ -1,6 +1,3 @@
-USE [DEV]
-GO
-/****** Object:  StoredProcedure [dbo].[Employee Sales by Country]    Script Date: 11/30/2024 6:46:00 PM ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
