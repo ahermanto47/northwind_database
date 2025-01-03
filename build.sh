@@ -225,6 +225,83 @@ generate_alter_statement() {
 
 }
 
+write_table_file() {
+
+    if [[ ${processed_tables[@]} =~ $1 ]]; then
+        echo "1 - $file is already processed"
+    else
+        cat "$1" >> table.tmp
+        processed_tables+=("$1")
+    fi
+
+}
+
+process_table_file_with_dependencies() {
+
+    if [ $debug = 1 ]; then
+        echo "---------------------------------------------------------"
+        echo "Processed table files ${processed_tables[*]}"
+        echo "Processing table file $1"
+    fi
+
+    dependencies=$(grep -e "REFERENCES" "$1" | awk '{print $2}')
+
+    if [[ -z $dependencies ]]; then
+        if [ $debug = 1 ]; then
+            echo "$1 has no dependencies"
+        fi
+        write_table_file $1
+    else
+        # when we have dependencies, process the dependencies first then this file
+        if [ $debug = 1 ]; then
+            echo "$1 has dependencies"
+        fi
+
+        # Save current IFS (Internal Field Separator)
+        SAVEIFS=$IFS
+        # Change IFS to newline char
+        IFS=$'\n'
+        # split the value string into an array by the same name
+        dependency_names=($dependencies)
+        # Reset IFS to before
+        IFS=$SAVEIFS
+
+        for (( i=0; i<${#dependency_names[@]}; i++ ))
+        do
+            if [ $debug = 1 ]; then
+                echo "Dependency table - $i: ${dependency_names[$i]}"
+            fi
+
+            # skip when dependency to itself
+            object_schema=$(get_object_info_from_filename "$1" "schema")
+            object_name=$(get_object_info_from_filename "$1" "name")
+
+            if [ ${dependency_names[$i]} = "[$object_schema].[$object_name]" ]; then
+                continue
+            fi
+
+            tmp_file_from_name=$(echo "${dependency_names[$i]}" | sed 's/[][]//g')
+            file_from_name=$(echo "$tmp_file_from_name.Table.sql")
+
+            # check for more dependencies on this dependency
+            if [[ ${processed_tables[@]} =~ $file_from_name ]]; then
+                if [ $debug = 1 ]; then
+                    echo "Dependency table file $file_from_name is already processed"
+                fi
+
+                continue
+            else
+                process_table_file_with_dependencies "$file_from_name"
+            fi
+
+            write_table_file "$file_from_name"
+
+        done
+
+        write_table_file "$1"
+    fi
+
+}
 
 # mode can be full or delta
 # debug can be 1 or 0
@@ -269,17 +346,20 @@ rm -rf build
 mkdir build
 cp dbo.*.sql build
 cd build
+dos2unix dbo.*.sql
+
+processed_tables=()
+pending_table_files=()
 
 for file in *.sql 
 do
+    object_schema=$(get_object_info_from_filename "$file" "schema")
+    object_name=$(get_object_info_from_filename "$file" "name")
+    object_type=$(get_object_info_from_filename "$file" "type")
+
     if [ "$mode" = "delta" ]; then
 
         # we find difference from repo vs actual db
-        object_schema=$(get_object_info_from_filename "$file" "schema")
-        object_name=$(get_object_info_from_filename "$file" "name")
-        object_type=$(get_object_info_from_filename "$file" "type")
-        
-
         # first we get table info
         if [ "$object_type" = "Table" ]; then
 
@@ -373,7 +453,13 @@ do
 
         # we force everything from repo
         if [[ $file = *"Table"* ]]; then
-            cat "$file" >> table.tmp
+
+            if [[ ${processed_tables[@]} =~ "$file" ]]; then
+                continue
+            else
+                process_table_file_with_dependencies "$file"
+            fi
+
         elif  [[ $file = *"View"* ]]; then
             cat "$file" >> view.tmp
         elif  [[ $file = *"StoredProcedure"* ]]; then
@@ -386,11 +472,11 @@ done
 
 # we do this only for full build
 if [ "$mode" = "full" ]; then
-    for tmp in table.tmp view.tmp sp.tmp
+    for tmp in table.tmp table_with_fk.tmp view.tmp sp.tmp
     do
         cat $tmp >> database.sql 2>&1
     done
 fi
 
 # cleanup
-rm dbo.*.sql *.tmp
+rm dbo.*.sql
