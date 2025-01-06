@@ -2,6 +2,14 @@
 #
 # sample script to build a microsoft sql sever database
 #
+log() {
+    #$1 is the message
+    timestamp=$(date -u +%T)
+    if [ $debug = 1 ]; then
+        echo "($timestamp):(${FUNCNAME[1]}): $1"
+    fi
+}
+
 get_object_info_from_filename() {
 
     IFS='.' read -ra OBJECT <<< "$1"
@@ -203,17 +211,11 @@ generate_alter_statement() {
             echo "NOP"
         elif [ "$diff_action" = "d" ]; then 
             CURRENT_INDEX=$(cat current_index_in_db)
-            if [ $debug = 1 ]; then
-                echo "current index in db: $CURRENT_INDEX"
-            fi
+            log "current index in db: $CURRENT_INDEX"
             index_to_be_removed=$(echo "$object_change" | awk '{$1=$1};1' | sed 's/[][\/*.]/\\&/g; s%.*%,&%')
-            if [ $debug = 1 ]; then
-                echo "index_to_be_removed: $index_to_be_removed"
-            fi
+            log "index_to_be_removed: $index_to_be_removed"
             MODIFY_INDEX=$(sed -e "s|${index_to_be_removed}||g" current_index_in_db )
-            if [ $debug = 1 ]; then
-                echo "modified index: $MODIFY_INDEX"
-            fi
+            log "modified index: $MODIFY_INDEX"
             echo "ALTER TABLE [$1].[$2] ADD $MODIFY_INDEX" >> database.sql 2>&1
         elif [ "$diff_action" = "c" ]; then
             # todo 
@@ -227,35 +229,40 @@ generate_alter_statement() {
 
 write_table_file() {
 
-    if [[ ${processed_tables[@]} =~ $1 ]]; then
-        echo "1 - $file is already processed"
-    else
-        cat "$1" >> table.tmp
-        processed_tables+=("$1")
-    fi
+    log "Caller - ${FUNCNAME[1]}"
+    log "Parent table file - [$file]"
+    log "Processing table file - [$1]"
+    log "recursive_level - [$recursive_level]"
+
+    # if [ "$file" != "$1" ] || [ $recursive_level -eq 1 ] ; then
+        if [[ ${processed_tables[@]} =~ $1 ]]; then
+            log "$1 is already processed"
+        else
+            log "writing file $1"
+            cat "$1" >> table.tmp
+            processed_tables+=("$1")
+        fi
+    # fi
 
 }
 
 process_table_file_with_dependencies() {
 
-    if [ $debug = 1 ]; then
-        echo "---------------------------------------------------------"
-        echo "Processed table files ${processed_tables[*]}"
-        echo "Processing table file $1"
-    fi
+    recursive_level=$2
+
+    log "---------------------------------------------------------------------------------------------------"
+    log "Caller - ${FUNCNAME[1]}"
+    log "Level $2 - Processed table files - [${processed_tables[*]}]"
+    log "Processing table file - [$1]"
 
     dependencies=$(grep -e "REFERENCES" "$1" | awk '{print $2}')
 
     if [[ -z $dependencies ]]; then
-        if [ $debug = 1 ]; then
-            echo "$1 has no dependencies"
-        fi
+        log "Level $2 - $1 has no dependencies"
         write_table_file $1
     else
         # when we have dependencies, process the dependencies first then this file
-        if [ $debug = 1 ]; then
-            echo "$1 has dependencies"
-        fi
+        log "Level $2 - $1 has dependencies"
 
         # Save current IFS (Internal Field Separator)
         SAVEIFS=$IFS
@@ -268,9 +275,7 @@ process_table_file_with_dependencies() {
 
         for (( i=0; i<${#dependency_names[@]}; i++ ))
         do
-            if [ $debug = 1 ]; then
-                echo "Dependency table - $i: ${dependency_names[$i]}"
-            fi
+            log "Level $2 - Dependency table - $i: ${dependency_names[$i]}"
 
             # skip when dependency to itself
             object_schema=$(get_object_info_from_filename "$1" "schema")
@@ -285,21 +290,25 @@ process_table_file_with_dependencies() {
 
             # check for more dependencies on this dependency
             if [[ ${processed_tables[@]} =~ $file_from_name ]]; then
-                if [ $debug = 1 ]; then
-                    echo "Dependency table file $file_from_name is already processed"
-                fi
+                log "Level $2 - Dependency table file $file_from_name is already processed"
 
                 continue
             else
-                process_table_file_with_dependencies "$file_from_name"
+                log "Level $2 - processing dependency table file $file_from_name"
+                inner_level=$(($2 + 1))
+                process_table_file_with_dependencies "$file_from_name" $inner_level
             fi
 
-            write_table_file "$file_from_name"
+            write_table_file "$file_from_name" 
 
         done
 
+        recursive_level=$(($recursive_level - 1))
+
         write_table_file "$1"
     fi
+
+    # recursive_level=$2
 
 }
 
@@ -350,6 +359,7 @@ dos2unix dbo.*.sql
 
 processed_tables=()
 pending_table_files=()
+recursive_level=0
 
 for file in *.sql 
 do
@@ -363,10 +373,12 @@ do
         # first we get table info
         if [ "$object_type" = "Table" ]; then
 
-            if [ $debug = 1 ]; then
-                echo "---------------------------------------------------------"
-                echo "table: $object_name"
-            fi
+            # if [ $debug = 1 ]; then
+            #     echo "---------------------------------------------------------"
+            #     echo "main - table: $object_name"
+            # fi
+            log "---------------------------------------------------------------------------------------------------"
+            log "table: $object_name"
 
             if [ "$target" = "db" ]; then 
                 # get table column info from db
@@ -389,7 +401,7 @@ do
 
             # generate alter column statement
             if [ -z "$diff_result" ]; then
-                echo "No column difference"
+                echo "main - No column difference"
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
                 echo "$diffs"
@@ -412,7 +424,7 @@ do
             # grab the index name
             index_name=$(cat index_name)
             if [ $debug = 1 ]; then
-                echo "index: $index_name"
+                echo "main - index: $index_name"
                 echo "---------------------------------------------------------"
             fi
 
@@ -426,7 +438,7 @@ do
 
             # generate alter index statement
             if [ -z "$diff_result" ]; then
-                echo "No index difference"
+                echo "main - No index difference"
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
                 echo "$diffs"
@@ -454,10 +466,14 @@ do
         # we force everything from repo
         if [[ $file = *"Table"* ]]; then
 
+            log "---------------------------------------------------------------------------------------------------"
+            log "Processing table file - [$file]"
+
             if [[ ${processed_tables[@]} =~ "$file" ]]; then
+                log "$file is already processed"
                 continue
             else
-                process_table_file_with_dependencies "$file"
+                process_table_file_with_dependencies "$file" 1
             fi
 
         elif  [[ $file = *"View"* ]]; then
@@ -472,7 +488,7 @@ done
 
 # we do this only for full build
 if [ "$mode" = "full" ]; then
-    for tmp in table.tmp table_with_fk.tmp view.tmp sp.tmp
+    for tmp in table.tmp view.tmp sp.tmp
     do
         cat $tmp >> database.sql 2>&1
     done
