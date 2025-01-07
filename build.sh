@@ -10,6 +10,13 @@ log() {
     fi
 }
 
+# join_by() {
+#   local d=${1-} f=${2-}
+#   if shift 2; then
+#     printf %s "$f" "${@/#/$d}"
+#   fi
+# }
+
 get_object_info_from_filename() {
 
     IFS='.' read -ra OBJECT <<< "$1"
@@ -234,83 +241,87 @@ write_table_file() {
     log "Processing table file - [$1]"
     log "recursive_level - [$recursive_level]"
 
-    # if [ "$file" != "$1" ] || [ $recursive_level -eq 1 ] ; then
-        if [[ ${processed_tables[@]} =~ $1 ]]; then
-            log "$1 is already processed"
-        else
-            log "writing file $1"
-            cat "$1" >> table.tmp
-            processed_tables+=("$1")
-        fi
-    # fi
+    if [[ ${processed_tables[@]} =~ $1 ]]; then
+        log "$1 is already processed"
+    else
+        log "writing file $1"
+        cat "$1" >> table.tmp
+        processed_tables+=("$1")
+    fi
 
 }
 
-process_table_file_with_dependencies() {
+declare -A table_files_dependencies_map=()
 
-    recursive_level=$2
+map_table_file_dependencies() {
 
-    log "---------------------------------------------------------------------------------------------------"
-    log "Caller - ${FUNCNAME[1]}"
-    log "Level $2 - Processed table files - [${processed_tables[*]}]"
-    log "Processing table file - [$1]"
+    file_dependencies=()
 
-    dependencies=$(grep -e "REFERENCES" "$1" | awk '{print $2}')
+    dependencies2=$(grep -e "REFERENCES" "$1" | awk '{print $2}')
 
-    if [[ -z $dependencies ]]; then
-        log "Level $2 - $1 has no dependencies"
-        write_table_file $1
+    if [[ -z $dependencies2 ]]; then
+        log "$1 has no dependencies"
     else
-        # when we have dependencies, process the dependencies first then this file
-        log "Level $2 - $1 has dependencies"
-
         # Save current IFS (Internal Field Separator)
         SAVEIFS=$IFS
         # Change IFS to newline char
         IFS=$'\n'
         # split the value string into an array by the same name
-        dependency_names=($dependencies)
+        dependency_names=($dependencies2)
         # Reset IFS to before
         IFS=$SAVEIFS
-
+        
         for (( i=0; i<${#dependency_names[@]}; i++ ))
         do
-            log "Level $2 - Dependency table - $i: ${dependency_names[$i]}"
-
-            # skip when dependency to itself
             object_schema=$(get_object_info_from_filename "$1" "schema")
             object_name=$(get_object_info_from_filename "$1" "name")
 
             if [ ${dependency_names[$i]} = "[$object_schema].[$object_name]" ]; then
+                log "Skipping Dependency table - $i: ${dependency_names[$i]}"
                 continue
             fi
 
             tmp_file_from_name=$(echo "${dependency_names[$i]}" | sed 's/[][]//g')
             file_from_name=$(echo "$tmp_file_from_name.Table.sql")
 
-            # check for more dependencies on this dependency
-            if [[ ${processed_tables[@]} =~ $file_from_name ]]; then
-                log "Level $2 - Dependency table file $file_from_name is already processed"
-
-                continue
-            else
-                log "Level $2 - processing dependency table file $file_from_name"
-                inner_level=$(($2 + 1))
-                process_table_file_with_dependencies "$file_from_name" $inner_level
-            fi
-
-            write_table_file "$file_from_name" 
-
+            file_dependencies+=("$file_from_name")
         done
 
-        recursive_level=$(($recursive_level - 1))
+        str_file_dependencies=$(IFS=, ; echo "${file_dependencies[*]}")
 
-        write_table_file "$1"
+        if [ ! -z $str_file_dependencies ]; then
+            log "Joined dependencies - $str_file_dependencies"
+
+            table_files_dependencies_map+=(["$1"]="$str_file_dependencies")
+        fi
     fi
 
-    # recursive_level=$2
+}
+
+write_map_key_files() {
+
+
+        str_table_files_3=${table_files_dependencies_map[$1]}
+        # Save current IFS (Internal Field Separator)
+        SAVEIFS=$IFS
+        # Change IFS to newline char
+        IFS=$','
+        # split the value string into an array by the same name
+        table_files_3=($str_table_files_3)
+        # Reset IFS to before
+        IFS=$SAVEIFS
+
+        for (( i=0; i<${#table_files_3[@]}; i++ ))
+        do
+            log "Calling write_table_file - ${table_files_3[$i]}" 
+            write_table_file "${table_files_3[$i]}"
+        done
+
+        log "Calling write_table_file - $1" 
+        write_table_file "$1"
 
 }
+
 
 # mode can be full or delta
 # debug can be 1 or 0
@@ -358,8 +369,9 @@ cd build
 dos2unix dbo.*.sql
 
 processed_tables=()
-pending_table_files=()
 recursive_level=0
+phase_1_tables=()
+phase_2_tables=()
 
 for file in *.sql 
 do
@@ -469,12 +481,7 @@ do
             log "---------------------------------------------------------------------------------------------------"
             log "Processing table file - [$file]"
 
-            if [[ ${processed_tables[@]} =~ "$file" ]]; then
-                log "$file is already processed"
-                continue
-            else
-                process_table_file_with_dependencies "$file" 1
-            fi
+            map_table_file_dependencies "$file"
 
         elif  [[ $file = *"View"* ]]; then
             cat "$file" >> view.tmp
@@ -488,6 +495,56 @@ done
 
 # we do this only for full build
 if [ "$mode" = "full" ]; then
+
+    # iterate through the table dependency map, write table with multi dependencies last
+    for table_file in "${!table_files_dependencies_map[@]}"
+    do
+        log "---------------------------------------------------------------------------------------------------"
+        log "Processing table file - [$table_file]"
+        log "Dependencies for table file - $table_file: ${table_files_dependencies_map[$table_file]}"
+
+        str_table_files=${table_files_dependencies_map[$table_file]}
+        # Save current IFS (Internal Field Separator)
+        SAVEIFS=$IFS
+        # Change IFS to newline char
+        IFS=$','
+        # split the value string into an array by the same name
+        table_files_2=($str_table_files)
+        # Reset IFS to before
+        IFS=$SAVEIFS
+
+        phase=1
+
+        for (( i=0; i<${#table_files_2[@]}; i++ ))
+        do
+            str_map_keys=$(echo "${!table_files_dependencies_map[@]}")
+
+            if [[ "$str_map_keys" = *"${table_files_2[$i]}"* ]]; then
+                log "$table_file depends on map key ${table_files_2[$i]}"
+                phase=2
+                phase_2_tables+=("$table_file")
+                break
+            fi
+        done
+
+        if [ $phase -eq 1 ]; then
+             phase_1_tables+=("$table_file")
+        fi
+
+    done
+        
+    # write tables with simple dependencies
+    for (( i=0; i<${#phase_1_tables[@]}; i++ ))
+    do
+        write_map_key_files "${phase_1_tables[$i]}"
+    done
+
+    # write tables with multi level dependencies
+    for (( i=0; i<${#phase_2_tables[@]}; i++ ))
+    do
+        write_map_key_files "${phase_2_tables[$i]}"
+    done
+    
     for tmp in table.tmp view.tmp sp.tmp
     do
         cat $tmp >> database.sql 2>&1
