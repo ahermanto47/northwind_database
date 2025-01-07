@@ -2,6 +2,16 @@
 #
 # sample script to build a microsoft sql sever database
 #
+
+# global variables start here 
+declare -A table_files_dependencies_map=()
+processed_tables=()
+recursive_level=0
+phase_1_tables=()
+phase_2_tables=()
+
+
+# functions start here 
 log() {
     #$1 is the message
     timestamp=$(date -u +%T)
@@ -251,8 +261,6 @@ write_table_file() {
 
 }
 
-declare -A table_files_dependencies_map=()
-
 map_table_file_dependencies() {
 
     file_dependencies=()
@@ -322,7 +330,7 @@ write_map_key_files() {
 
 }
 
-
+############################################################################################
 # mode can be full or delta
 # debug can be 1 or 0
 # target can be db or dir
@@ -330,6 +338,9 @@ write_map_key_files() {
 # examples: 
 # ./build.sh -d 1 -m delta -t dir -s /c/users/dowload/export_db
 # ./build.sh -d 1 -m delta -t db
+############################################################################################
+
+# main start here 
 while getopts ":d:m:t:s:" opt; do
   case $opt in
     d) debug="$OPTARG"
@@ -367,11 +378,6 @@ mkdir build
 cp dbo.*.sql build
 cd build
 dos2unix dbo.*.sql
-
-processed_tables=()
-recursive_level=0
-phase_1_tables=()
-phase_2_tables=()
 
 for file in *.sql 
 do
