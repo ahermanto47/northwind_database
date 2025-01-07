@@ -6,7 +6,6 @@
 # global variables start here 
 declare -A table_files_dependencies_map=()
 processed_tables=()
-recursive_level=0
 phase_1_tables=()
 phase_2_tables=()
 
@@ -249,7 +248,6 @@ write_table_file() {
     log "Caller - ${FUNCNAME[1]}"
     log "Parent table file - [$file]"
     log "Processing table file - [$1]"
-    log "recursive_level - [$recursive_level]"
 
     if [[ ${processed_tables[@]} =~ $1 ]]; then
         log "$1 is already processed"
