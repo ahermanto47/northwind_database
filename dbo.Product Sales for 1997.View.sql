@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-create view [dbo].[Product Sales for 1997] AS
+CREATE VIEW [dbo].[Product Sales for 1997] AS
 SELECT Categories.CategoryName, Products.ProductName, 
 Sum(CONVERT(money,("Order Details".UnitPrice*Quantity*(1-Discount)/100))*100) AS ProductSales
 FROM (Categories INNER JOIN Products ON Categories.CategoryID = Products.CategoryID) 

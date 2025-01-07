@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-create view [dbo].[Orders Qry] AS
+CREATE VIEW [dbo].[Orders Qry] AS
 SELECT Orders.OrderID, Orders.CustomerID, Orders.EmployeeID, Orders.OrderDate, Orders.RequiredDate, 
 	Orders.ShippedDate, Orders.ShipVia, Orders.Freight, Orders.ShipName, Orders.ShipAddress, Orders.ShipCity, 
 	Orders.ShipRegion, Orders.ShipPostalCode, Orders.ShipCountry, 

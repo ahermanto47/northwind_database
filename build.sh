@@ -19,13 +19,6 @@ log() {
     fi
 }
 
-# join_by() {
-#   local d=${1-} f=${2-}
-#   if shift 2; then
-#     printf %s "$f" "${@/#/$d}"
-#   fi
-# }
-
 get_object_info_from_filename() {
 
     IFS='.' read -ra OBJECT <<< "$1"
@@ -49,6 +42,9 @@ call_sqlcmd() {
         result=$(sqlcmd -u -W -w 999 -h-1 -s"," -i input.sql | tr -d '\r')
         echo "$result"  > current_index_in_db
         echo "$result"  | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_db
+    elif [ "$1" = "definition" ]; then
+        result=$(sqlcmd -u -y 8000 -h-1 -i input.sql)
+        echo "$result"  > file_from_db
     fi
 
 }
@@ -140,6 +136,61 @@ EOM
 
 }
 
+get_stored_procedure_definition_from_db() {
+
+    cat > input.sql << EOM
+:setvar SQLCMDERRORLEVEL 1
+USE DEV
+GO
+SET NOCOUNT ON
+GO
+select 
+   ROUTINE_DEFINITION 
+from INFORMATION_SCHEMA.ROUTINES 
+where ROUTINE_SCHEMA = '$1'
+AND ROUTINE_NAME = '$2'
+GO
+EOM
+
+    call_sqlcmd "definition"
+
+}
+
+get_view_definition_from_db() {
+
+
+    cat > input.sql << EOM
+:setvar SQLCMDERRORLEVEL 1
+USE DEV
+GO
+SET NOCOUNT ON
+GO
+select 
+   VIEW_DEFINITION 
+from INFORMATION_SCHEMA.VIEWS 
+where TABLE_SCHEMA = '$1'
+AND TABLE_NAME = '$2'
+GO
+EOM
+
+    call_sqlcmd "definition"
+
+}
+
+get_view_definition_from_file() {
+
+    result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' )
+    echo "$result" > file_from_repo
+
+}
+
+get_stored_procedure_definition_from_file() {
+
+    result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' )
+    echo "$result" > file_from_repo
+
+}
+
 get_table_index_info_from_file() {
 
     if [ "$2" = "repo" ]; then
@@ -187,59 +238,65 @@ find_difference() {
 
 generate_alter_statement() {
 
-    IFS=',' read -ra OBJECT <<< "$3"
-    diff_action_result="${OBJECT[0]}"
-    object_change="${OBJECT[1]}"
-    read diff_action <<< $(echo $diff_action_result | awk '{split($0, a, "[0-9]+"); print a[2]}')
-    read db_line repo_line <<< $(echo $diff_action_result | awk '{split($0, a, "[^0-9]+"); print a[1], a[2]}')
+    if [ "$4" = "definition" ]; then
+        sed -e 's/CREATE/ALTER/g' "$5" >> database.sql
+    else
 
-    if [ $debug = 1 ]; then
-        echo "$diff_action_result"
-        echo "$object_change"
-        echo "$diff_action"
-        echo "$db_line"
-        echo "$repo_line"
-    fi
+        IFS=',' read -ra OBJECT <<< "$3"
+        diff_action_result="${OBJECT[0]}"
+        object_change="${OBJECT[1]}"
+        read diff_action <<< $(echo $diff_action_result | awk '{split($0, a, "[0-9]+"); print a[2]}')
+        read db_line repo_line <<< $(echo $diff_action_result | awk '{split($0, a, "[^0-9]+"); print a[1], a[2]}')
 
-    if [ "$4" = "column" ]; then
-        ALTER_STATEMENT=$(echo "ALTER TABLE [$1].[$2]")
-        echo "$ALTER_STATEMENT" >> database.sql 2>&1
-
-        if [ "$diff_action" = "a" ]; then
-            MODIFY_COLUMN=$(echo "ADD "$object_change)
-            echo "$MODIFY_COLUMN" >> database.sql 2>&1
-        elif [ "$diff_action" = "d" ]; then 
-            IFS=' ' read -ra OBJECT <<< "$object_change"
-            DROP_COLUMN=$(echo "${OBJECT[0]}")
-            MODIFY_COLUMN=$(echo "DROP COLUMN "$DROP_COLUMN)
-            echo "$MODIFY_COLUMN" >> database.sql 2>&1
-        elif [ "$diff_action" = "c" ]; then
-            # todo 
-            echo "NOP"
+        if [ $debug = 1 ]; then
+            echo "$diff_action_result"
+            echo "$object_change"
+            echo "$diff_action"
+            echo "$db_line"
+            echo "$repo_line"
         fi
-    elif [ "$4" = "index" ]; then
-        ALTER_STATEMENT=$(echo "ALTER TABLE [$1].[$2] DROP CONSTRAINT $5 WITH ( ONLINE = OFF )")
-        echo "$ALTER_STATEMENT" >> database.sql 2>&1
+
+        if [ "$4" = "column" ]; then
+            ALTER_STATEMENT=$(echo "ALTER TABLE [$1].[$2]")
+            echo "$ALTER_STATEMENT" >> database.sql 2>&1
+
+            if [ "$diff_action" = "a" ]; then
+                MODIFY_COLUMN=$(echo "ADD "$object_change)
+                echo "$MODIFY_COLUMN" >> database.sql 2>&1
+            elif [ "$diff_action" = "d" ]; then 
+                IFS=' ' read -ra OBJECT <<< "$object_change"
+                DROP_COLUMN=$(echo "${OBJECT[0]}")
+                MODIFY_COLUMN=$(echo "DROP COLUMN "$DROP_COLUMN)
+                echo "$MODIFY_COLUMN" >> database.sql 2>&1
+            elif [ "$diff_action" = "c" ]; then
+                # todo 
+                echo "NOP"
+            fi
+        elif [ "$4" = "index" ]; then
+            ALTER_STATEMENT=$(echo "ALTER TABLE [$1].[$2] DROP CONSTRAINT $5 WITH ( ONLINE = OFF )")
+            echo "$ALTER_STATEMENT" >> database.sql 2>&1
+            echo "GO" >> database.sql 2>&1
+
+            if [ "$diff_action" = "a" ]; then
+                # todo 
+                echo "NOP"
+            elif [ "$diff_action" = "d" ]; then 
+                CURRENT_INDEX=$(cat current_index_in_db)
+                log "current index in db: $CURRENT_INDEX"
+                index_to_be_removed=$(echo "$object_change" | awk '{$1=$1};1' | sed 's/[][\/*.]/\\&/g; s%.*%,&%')
+                log "index_to_be_removed: $index_to_be_removed"
+                MODIFY_INDEX=$(sed -e "s|${index_to_be_removed}||g" current_index_in_db )
+                log "modified index: $MODIFY_INDEX"
+                echo "ALTER TABLE [$1].[$2] ADD $MODIFY_INDEX" >> database.sql 2>&1
+            elif [ "$diff_action" = "c" ]; then
+                # todo 
+                echo "NOP"
+            fi
+        fi
+
         echo "GO" >> database.sql 2>&1
-
-        if [ "$diff_action" = "a" ]; then
-            # todo 
-            echo "NOP"
-        elif [ "$diff_action" = "d" ]; then 
-            CURRENT_INDEX=$(cat current_index_in_db)
-            log "current index in db: $CURRENT_INDEX"
-            index_to_be_removed=$(echo "$object_change" | awk '{$1=$1};1' | sed 's/[][\/*.]/\\&/g; s%.*%,&%')
-            log "index_to_be_removed: $index_to_be_removed"
-            MODIFY_INDEX=$(sed -e "s|${index_to_be_removed}||g" current_index_in_db )
-            log "modified index: $MODIFY_INDEX"
-            echo "ALTER TABLE [$1].[$2] ADD $MODIFY_INDEX" >> database.sql 2>&1
-        elif [ "$diff_action" = "c" ]; then
-            # todo 
-            echo "NOP"
-        fi
-    fi
         
-    echo "GO" >> database.sql 2>&1
+    fi
 
 }
 
@@ -389,10 +446,6 @@ do
         # first we get table info
         if [ "$object_type" = "Table" ]; then
 
-            # if [ $debug = 1 ]; then
-            #     echo "---------------------------------------------------------"
-            #     echo "main - table: $object_name"
-            # fi
             log "---------------------------------------------------------------------------------------------------"
             log "table: $object_name"
 
@@ -410,17 +463,15 @@ do
             # find the column difference
             diff_result=$(find_difference)
 
-            if [ $debug = 1 ]; then
-                echo "---------------------------------------------------------"
-                echo "$diff_result"
-            fi
+            log "diff_result - $diff_result"
 
             # generate alter column statement
             if [ -z "$diff_result" ]; then
-                echo "main - No column difference"
+                log "No column difference"
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
-                echo "$diffs"
+                # echo "$diffs"
+                log "diffs - $diffs"
                 generate_alter_statement $object_schema $object_name "$diffs" "column"
             fi
         
@@ -439,41 +490,66 @@ do
 
             # grab the index name
             index_name=$(cat index_name)
-            if [ $debug = 1 ]; then
-                echo "main - index: $index_name"
-                echo "---------------------------------------------------------"
-            fi
+            log "index: $index_name"
 
             # find the index difference
             diff_result=$(find_difference "ignore_space")
 
-            if [ $debug = 1 ]; then
-                echo "$diff_result"
-                echo "---------------------------------------------------------"
-            fi
+            log "diff_result - $diff_result"
 
             # generate alter index statement
             if [ -z "$diff_result" ]; then
-                echo "main - No index difference"
+                log "No index difference"
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
-                echo "$diffs"
+                # echo "$diffs"
+                log "diffs - $diffs"
                 generate_alter_statement $object_schema "$object_name" "$diffs" "index" $index_name
             fi
 
             #break
         
         # then we get view info from db
+        elif [ "$object_type" = "View" ]; then
+            log "---------------------------------------------------------------------------------------------------"
+            log "view: $object_name"
             
+            get_view_definition_from_db "$object_schema" "$object_name"
+
+            get_view_definition_from_file "$file"
+
             # find the difference
+            diff_result=$(find_difference "ignore_space")
+
+            log "diff_result - $diff_result"
 
             # generate alter statement
+            if [ -z "$diff_result" ]; then
+                log "No definition difference"
+            else
+                generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
+            fi
 
         # then we get storedprocedure info from db
-            
+        elif [ "$object_type" = "StoredProcedure" ]; then
+            log "---------------------------------------------------------------------------------------------------"
+            log "storedprocedure: $object_name"
+
+            get_stored_procedure_definition_from_db "$object_schema" "$object_name"
+
+            get_stored_procedure_definition_from_file "$file"
+
             # find the difference
+            diff_result=$(find_difference "ignore_space")
+
+            log "diff_result - $diff_result"
 
             # generate alter statement
+            if [ -z "$diff_result" ]; then
+                log "No definition difference"
+            else
+                generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
+            fi
 
         fi
 
@@ -482,6 +558,7 @@ do
         # we force everything from repo
         if [[ $file = *"Table"* ]]; then
 
+            # for tables we map their dependencies here
             log "---------------------------------------------------------------------------------------------------"
             log "Processing table file - [$file]"
 
@@ -549,6 +626,7 @@ if [ "$mode" = "full" ]; then
         write_map_key_files "${phase_2_tables[$i]}"
     done
     
+    # write everything
     for tmp in table.tmp view.tmp sp.tmp
     do
         cat $tmp >> database.sql 2>&1
@@ -556,4 +634,8 @@ if [ "$mode" = "full" ]; then
 fi
 
 # cleanup
-rm dbo.*.sql
+if [ "$mode" = "full" ]; then
+    rm dbo.*.sql *.tmp
+else
+    rm dbo.*.sql current_index_in_db index_name input.sql
+fi

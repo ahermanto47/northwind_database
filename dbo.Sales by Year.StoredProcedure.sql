@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-create procedure [dbo].[Sales by Year] 
+CREATE PROCEDURE [dbo].[Sales by Year] 
 	@Beginning_Date DateTime, @Ending_Date DateTime AS
 SELECT Orders.ShippedDate, Orders.OrderID, "Order Subtotals".Subtotal, DATENAME(yy,ShippedDate) AS Year
 FROM Orders INNER JOIN "Order Subtotals" ON Orders.OrderID = "Order Subtotals".OrderID

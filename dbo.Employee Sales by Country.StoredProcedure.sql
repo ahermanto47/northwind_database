@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-create procedure [dbo].[Employee Sales by Country] 
+CREATE PROCEDURE [dbo].[Employee Sales by Country] 
 @Beginning_Date DateTime, @Ending_Date DateTime AS
 SELECT Employees.Country, Employees.LastName, Employees.FirstName, Orders.ShippedDate, Orders.OrderID, "Order Subtotals".Subtotal AS SaleAmount
 FROM Employees INNER JOIN 

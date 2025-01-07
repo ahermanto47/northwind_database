@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-create view [dbo].[Sales Totals by Amount] AS
+CREATE VIEW [dbo].[Sales Totals by Amount] AS
 SELECT "Order Subtotals".Subtotal AS SaleAmount, Orders.OrderID, Customers.CompanyName, Orders.ShippedDate
 FROM 	Customers INNER JOIN 
 		(Orders INNER JOIN "Order Subtotals" ON Orders.OrderID = "Order Subtotals".OrderID) 

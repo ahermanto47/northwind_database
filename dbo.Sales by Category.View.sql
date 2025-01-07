@@ -3,7 +3,7 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-create view [dbo].[Sales by Category] AS
+CREATE VIEW [dbo].[Sales by Category] AS
 SELECT Categories.CategoryID, Categories.CategoryName, Products.ProductName, 
 	Sum("Order Details Extended".ExtendedPrice) AS ProductSales
 FROM 	Categories INNER JOIN 
