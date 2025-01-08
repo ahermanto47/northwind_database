@@ -43,7 +43,7 @@ call_sqlcmd() {
         echo "$result"  > current_index_in_db
         echo "$result"  | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_db
     elif [ "$1" = "definition" ]; then
-        result=$(sqlcmd -u -y 8000 -h-1 -i input.sql)
+        result=$(sqlcmd -u -y 8000 -h-1 -i input.sql | sed '/^[[:space:]]*$/d')
         echo "$result"  > file_from_db
     fi
 
@@ -177,16 +177,9 @@ EOM
 
 }
 
-get_view_definition_from_file() {
+get_definition_from_file() {
 
-    result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' )
-    echo "$result" > file_from_repo
-
-}
-
-get_stored_procedure_definition_from_file() {
-
-    result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' )
+    result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' | sed '/^[[:space:]]*$/d')
     echo "$result" > file_from_repo
 
 }
@@ -516,7 +509,7 @@ do
             
             get_view_definition_from_db "$object_schema" "$object_name"
 
-            get_view_definition_from_file "$file"
+            get_definition_from_file "$file"
 
             # find the difference
             diff_result=$(find_difference "ignore_space")
@@ -537,7 +530,7 @@ do
 
             get_stored_procedure_definition_from_db "$object_schema" "$object_name"
 
-            get_stored_procedure_definition_from_file "$file"
+            get_definition_from_file "$file"
 
             # find the difference
             diff_result=$(find_difference "ignore_space")
