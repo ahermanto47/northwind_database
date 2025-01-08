@@ -9,7 +9,6 @@ processed_tables=()
 phase_1_tables=()
 phase_2_tables=()
 
-
 # functions start here 
 log() {
     #$1 is the message
@@ -308,6 +307,8 @@ write_table_file() {
 
 map_table_file_dependencies() {
 
+    log "Mapping dependencies for table file - [$1]"
+    
     file_dependencies=()
 
     dependencies2=$(grep -e "REFERENCES" "$1" | awk '{print $2}')
@@ -343,7 +344,7 @@ map_table_file_dependencies() {
         str_file_dependencies=$(IFS=, ; echo "${file_dependencies[*]}")
 
         if [ ! -z $str_file_dependencies ]; then
-            log "Joined dependencies - $str_file_dependencies"
+            log "Joined dependencies - [$str_file_dependencies]"
 
             table_files_dependencies_map+=(["$1"]="$str_file_dependencies")
         fi
@@ -353,26 +354,38 @@ map_table_file_dependencies() {
 
 write_map_key_files() {
 
+    log "Writing map key file and its dependencies - [$1]"
 
-        str_table_files_3=${table_files_dependencies_map[$1]}
-        # Save current IFS (Internal Field Separator)
-        SAVEIFS=$IFS
-        # Change IFS to newline char
-        IFS=$','
-        # split the value string into an array by the same name
-        table_files_3=($str_table_files_3)
-        # Reset IFS to before
-        IFS=$SAVEIFS
+    str_table_files_3=${table_files_dependencies_map[$1]}
+    # Save current IFS (Internal Field Separator)
+    SAVEIFS=$IFS
+    # Change IFS to newline char
+    IFS=$','
+    # split the value string into an array by the same name
+    table_files_3=($str_table_files_3)
+    # Reset IFS to before
+    IFS=$SAVEIFS
 
-        for (( j=0; j<${#table_files_3[@]}; j++ ))
-        do
-            log "Calling write_table_file - ${table_files_3[$j]}" 
-            write_table_file "${table_files_3[$j]}"
-        done
+    for (( j=0; j<${#table_files_3[@]}; j++ ))
+    do
+        log "Calling write_table_file - ${table_files_3[$j]}" 
+        write_table_file "${table_files_3[$j]}"
+    done
 
-        log "Calling write_table_file - $1" 
-        write_table_file "$1"
+    log "Calling write_table_file - $1" 
+    write_table_file "$1"
 
+}
+
+is_object_exist_in_target() {
+
+    # if we file is empty then its new object, otherwise its an existing object
+    if [[ -z $(grep '[^[:space:]]' file_from_db) ]] ; then
+        echo 0 
+    else
+        echo 1
+    fi
+    
 }
 
 ############################################################################################
@@ -429,13 +442,14 @@ dos2unix dbo.*.sql
 
 for file in *.sql 
 do
+    # get object info from the filename
     object_schema=$(get_object_info_from_filename "$file" "schema")
     object_name=$(get_object_info_from_filename "$file" "name")
     object_type=$(get_object_info_from_filename "$file" "type")
 
     if [ "$mode" = "delta" ]; then
+        # we look for differences from repo vs target
 
-        # we find difference from repo vs actual db
         # first we get table info
         if [ "$object_type" = "Table" ]; then
 
@@ -448,6 +462,17 @@ do
             elif [ "$target" = "dir" ]; then
                 # then we get table column info from target directory
                 get_table_column_info_from_file "$source$file" "dir"
+            fi
+
+            is_table_update=$(is_object_exist_in_target)
+
+            log "is_table_update - $is_table_update"
+
+            if [ $is_table_update -eq 0 ]; then
+                # this is a new object, just write the whole table file
+                cat "$file" >> database.sql
+                # then skip the rest of table logic
+                continue
             fi
 
             # then we get table column info from repo
@@ -464,7 +489,6 @@ do
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
                 log "diffs - $diffs"
-                #TODO if object doesnt exist in db, we need to leave sql as CREATE
                 generate_alter_statement $object_schema $object_name "$diffs" "column"
             fi
         
@@ -496,7 +520,6 @@ do
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
                 log "diffs - $diffs"
-                #TODO if object doesnt exist in db, we need to leave sql as CREATE
                 generate_alter_statement $object_schema "$object_name" "$diffs" "index" $index_name
             fi
 
@@ -516,6 +539,10 @@ do
                 get_definition_from_file "$source$file" "dir" 
             fi
 
+            is_view_update=$(is_object_exist_in_target)
+
+            log "is_view_update - $is_view_update"
+
             get_definition_from_file "$file" "repo"
 
             # find the difference
@@ -527,10 +554,15 @@ do
             if [ -z "$diff_result" ]; then
                 log "No definition difference"
             else
-                #TODO if object doesnt exist in db, we need to leave sql as CREATE
-                generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
+                if [ $is_view_update -eq 1 ]; then
+                    # existing object, so update it using sql ALTER
+                    generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
+                else
+                    # this is a new object, proceed write the whole file
+                    cat "$file" >> database.sql
+                fi
             fi
-
+ 
         # then we get storedprocedure info from db
         elif [ "$object_type" = "StoredProcedure" ]; then
             log "---------------------------------------------------------------------------------------------------"
@@ -545,6 +577,10 @@ do
                 get_definition_from_file "$file" "dir"
             fi            
 
+            is_sp_update=$(is_object_exist_in_target)
+
+            log "is_sp_update - $is_sp_update"
+
             get_definition_from_file "$file" "repo"
 
             # find the difference
@@ -556,8 +592,13 @@ do
             if [ -z "$diff_result" ]; then
                 log "No definition difference"
             else
-                #TODO if object doesnt exist in db, we need to leave sql as CREATE
-                generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
+                if [ $is_sp_update -eq 1 ]; then
+                    # existing object, so update it using sql ALTER
+                    generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
+                else
+                    # this is a new object, proceed write the whole file
+                    cat "$file" >> database.sql
+                fi
             fi
 
         fi
