@@ -180,19 +180,20 @@ EOM
 get_definition_from_file() {
 
     result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' | sed '/^[[:space:]]*$/d')
-    echo "$result" > file_from_repo
-
+    if [ "$2" = "repo" ]; then
+        echo "$result" > file_from_repo
+    elif [ "$2" = "dir" ]; then
+        echo "$result" > file_from_db
+    fi    
 }
 
 get_table_index_info_from_file() {
 
+    result=$(sed -n '/CONSTRAINT/{/NONCLUSTERED/q; p; :loop n; p; /WITH/q; b loop}' "$1" | tr '\n' ' ' )
+    echo "$result" | grep -oP -m 1 '(\[[a-zA-Z_]+\])' > index_name
     if [ "$2" = "repo" ]; then
-        result=$(sed -n '/CONSTRAINT/{/NONCLUSTERED/q; p; :loop n; p; /WITH/q; b loop}' "$1" | tr '\n' ' ' )
-        echo "$result" | grep -oP -m 1 '(\[[a-zA-Z_]+\])' > index_name
         echo "$result" | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_repo
     elif [ "$2" = "dir" ]; then
-        result=$(sed -n '/CONSTRAINT/{/NONCLUSTERED/q; p; :loop n; p; /WITH/q; b loop}' "$1" | tr '\n' ' ' )
-        echo "$result" | grep -oP -m 1 '(\[[a-zA-Z_]+\])' > index_name
         echo "$result" | grep -oP '(\(.+\))WITH (\(.+\))' | sed -e 's/WITH/,/g' | sed -e 's/(//g' | sed -e 's/)//g' | tr ',' '\n' > file_from_db
     fi
 
@@ -200,17 +201,13 @@ get_table_index_info_from_file() {
 
 get_table_column_info_from_file() {
 
+
+    result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
+    # result=$(sed -n '/CREATE/{p; :loop n; p; /CONSTRAINT/q; b loop}' "$1" | sed '1d;$d'| sed -e 's/^\s*//')
     if [ "$2" = "repo" ]; then
-
-        result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
         echo "$result" > file_from_repo
-    
     elif [ "$2" = "dir" ]; then
-
-        result=$(sed -e '/CREATE/,/GO/!d' "$1" | grep -e ',' | grep -v 'ASC,' | grep -v ')WITH' | sed -e 's/^\s*//')
-        # result=$(sed -n '/CREATE/{p; :loop n; p; /CONSTRAINT/q; b loop}' "$1" | sed '1d;$d'| sed -e 's/^\s*//')
         echo "$result" > file_from_db
-
     fi
 
 }
@@ -367,10 +364,10 @@ write_map_key_files() {
         # Reset IFS to before
         IFS=$SAVEIFS
 
-        for (( i=0; i<${#table_files_3[@]}; i++ ))
+        for (( j=0; j<${#table_files_3[@]}; j++ ))
         do
-            log "Calling write_table_file - ${table_files_3[$i]}" 
-            write_table_file "${table_files_3[$i]}"
+            log "Calling write_table_file - ${table_files_3[$j]}" 
+            write_table_file "${table_files_3[$j]}"
         done
 
         log "Calling write_table_file - $1" 
@@ -413,6 +410,9 @@ done
 
 if [ -z "$mode" ]; then
     printf "Missing mode parameter, exiting.."
+    exit
+elif [ -z "$target" ] && [ "$mode" = "delta" ]; then
+    printf "Missing target parameter for delta mode, exiting.."
     exit
 fi
 
@@ -463,8 +463,8 @@ do
                 log "No column difference"
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
-                # echo "$diffs"
                 log "diffs - $diffs"
+                #TODO if object doesnt exist in db, we need to leave sql as CREATE
                 generate_alter_statement $object_schema $object_name "$diffs" "column"
             fi
         
@@ -495,8 +495,8 @@ do
                 log "No index difference"
             else
                 diffs=$(echo "$diff_result" | paste -sd "," - | sed -e 's/<//g' | sed -e 's/>//g')
-                # echo "$diffs"
                 log "diffs - $diffs"
+                #TODO if object doesnt exist in db, we need to leave sql as CREATE
                 generate_alter_statement $object_schema "$object_name" "$diffs" "index" $index_name
             fi
 
@@ -507,9 +507,16 @@ do
             log "---------------------------------------------------------------------------------------------------"
             log "view: $object_name"
             
-            get_view_definition_from_db "$object_schema" "$object_name"
+            if [ "$target" = "db" ]; then 
+                # get view info from db
+                get_view_definition_from_db "$object_schema" "$object_name"
+            elif [ "$target" = "dir" ]; then
+                # then we get view info from target directory
+                dos2unix "$source$file"
+                get_definition_from_file "$source$file" "dir" 
+            fi
 
-            get_definition_from_file "$file"
+            get_definition_from_file "$file" "repo"
 
             # find the difference
             diff_result=$(find_difference "ignore_space")
@@ -520,6 +527,7 @@ do
             if [ -z "$diff_result" ]; then
                 log "No definition difference"
             else
+                #TODO if object doesnt exist in db, we need to leave sql as CREATE
                 generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
             fi
 
@@ -528,9 +536,16 @@ do
             log "---------------------------------------------------------------------------------------------------"
             log "storedprocedure: $object_name"
 
-            get_stored_procedure_definition_from_db "$object_schema" "$object_name"
+            if [ "$target" = "db" ]; then 
+                # get storedprocedure info from db
+                get_stored_procedure_definition_from_db "$object_schema" "$object_name"
+            elif [ "$target" = "dir" ]; then
+                # then we get storedprocedure info from target directory
+                dos2unix "$source$file"
+                get_definition_from_file "$file" "dir"
+            fi            
 
-            get_definition_from_file "$file"
+            get_definition_from_file "$file" "repo"
 
             # find the difference
             diff_result=$(find_difference "ignore_space")
@@ -541,6 +556,7 @@ do
             if [ -z "$diff_result" ]; then
                 log "No definition difference"
             else
+                #TODO if object doesnt exist in db, we need to leave sql as CREATE
                 generate_alter_statement $object_schema "$object_name" "$diffs" "definition" "$file"
             fi
 
@@ -594,6 +610,7 @@ if [ "$mode" = "full" ]; then
             str_map_keys=$(echo "${!table_files_dependencies_map[@]}")
 
             if [[ "$str_map_keys" = *"${table_files_2[$i]}"* ]]; then
+                # this table has multi dependency put it on second phase
                 log "$table_file depends on map key ${table_files_2[$i]}"
                 phase=2
                 phase_2_tables+=("$table_file")
@@ -608,14 +625,18 @@ if [ "$mode" = "full" ]; then
     done
         
     # write tables with simple dependencies
+    log "Phase 1 tables - [${phase_1_tables[*]}]"
     for (( i=0; i<${#phase_1_tables[@]}; i++ ))
     do
+        log "Phase 1 processing map key table file - [${phase_1_tables[$i]}]"
         write_map_key_files "${phase_1_tables[$i]}"
     done
 
     # write tables with multi level dependencies
+    log "Phase 2 tables - [${phase_2_tables[*]}]"
     for (( i=0; i<${#phase_2_tables[@]}; i++ ))
     do
+        log "Phase 2 processing map key table file - [${phase_2_tables[$i]}]"
         write_map_key_files "${phase_2_tables[$i]}"
     done
     
