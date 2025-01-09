@@ -6,8 +6,13 @@
 # global variables start here 
 declare -A table_files_dependencies_map=()
 processed_tables=()
+phase_0_tables=()
 phase_1_tables=()
 phase_2_tables=()
+declare -A view_files_dependencies_map=()
+processed_views=()
+phase_1_views=()
+phase_2_views=()
 
 # functions start here 
 log() {
@@ -292,7 +297,6 @@ generate_alter_statement() {
 write_table_file() {
 
     log "Caller - ${FUNCNAME[1]}"
-    log "Parent table file - [$file]"
     log "Processing table file - [$1]"
 
     if [[ ${processed_tables[@]} =~ $1 ]]; then
@@ -305,16 +309,47 @@ write_table_file() {
 
 }
 
-map_table_file_dependencies() {
+write_view_file() {
 
-    log "Mapping dependencies for table file - [$1]"
+    log "Caller - ${FUNCNAME[1]}"
+    log "Processing view file - [$1]"
+
+    if [[ ${processed_views[@]} =~ $1 ]]; then
+        log "$1 is already processed"
+    else
+        log "writing file $1"
+        cat "$1" >> view.tmp
+        processed_views+=("$1")
+    fi
+
+}
+
+map_file_dependencies() {
+
+    input_object_type="table"
+    if [ "$2" = "view" ]; then
+        input_object_type="view"
+    fi
+    log "Mapping dependencies for $input_object_type file - [$1]"
     
     file_dependencies=()
 
-    dependencies2=$(grep -e "REFERENCES" "$1" | awk '{print $2}')
+    REFERENCE_SEARCH_TERM="REFERENCES"
+    if [ "$2" = "view" ]; then
+        input_object_name=$(get_object_info_from_filename "$file" "name")
+        REFERENCE_SEARCH_TERM="$input_object_name"
+        dependencies2=$(grep -e "$REFERENCE_SEARCH_TERM" *.View.sql | grep FROM | awk -F":" '{print $1}')
+    else
+        dependencies2=$(grep -e "$REFERENCE_SEARCH_TERM" "$1" | awk '{print $2}')
+    fi
 
     if [[ -z $dependencies2 ]]; then
         log "$1 has no dependencies"
+
+        if [ "$2" = "table" ]; then
+            phase_0_tables+=("$1")
+        fi
+
     else
         # Save current IFS (Internal Field Separator)
         SAVEIFS=$IFS
@@ -325,28 +360,45 @@ map_table_file_dependencies() {
         # Reset IFS to before
         IFS=$SAVEIFS
         
-        for (( i=0; i<${#dependency_names[@]}; i++ ))
-        do
-            object_schema=$(get_object_info_from_filename "$1" "schema")
-            object_name=$(get_object_info_from_filename "$1" "name")
+        log "dependency_names - ${dependency_names[*]}"
 
-            if [ ${dependency_names[$i]} = "[$object_schema].[$object_name]" ]; then
-                log "Skipping Dependency table - $i: ${dependency_names[$i]}"
-                continue
+        for (( l=0; l<${#dependency_names[@]}; l++ ))
+        do
+            if [ "$2" = "view" ]; then
+                if [ "${dependency_names[$i]}" = "$1" ]; then
+                    log "Skipping dependency to itself - $i: ${dependency_names[$l]}"
+                    continue
+                fi
+
+                file_dependencies+=("${dependency_names[$l]}")    
+            else
+                object_schema=$(get_object_info_from_filename "$1" "schema")
+                object_name=$(get_object_info_from_filename "$1" "name")
+
+                if [ ${dependency_names[$l]} = "[$object_schema].[$object_name]" ]; then
+                    log "Skipping dependency to itself - $l: ${dependency_names[$l]}"
+                    phase_0_tables+=("$1")
+                    continue
+                fi
+
+                tmp_file_from_name=$(echo "${dependency_names[$l]}" | sed 's/[][]//g')
+                file_from_name=$(echo "$tmp_file_from_name.Table.sql")
+
+                file_dependencies+=("$file_from_name")
             fi
 
-            tmp_file_from_name=$(echo "${dependency_names[$i]}" | sed 's/[][]//g')
-            file_from_name=$(echo "$tmp_file_from_name.Table.sql")
-
-            file_dependencies+=("$file_from_name")
         done
 
         str_file_dependencies=$(IFS=, ; echo "${file_dependencies[*]}")
 
-        if [ ! -z $str_file_dependencies ]; then
+        if [ ! -z "$str_file_dependencies" ]; then
             log "Joined dependencies - [$str_file_dependencies]"
 
-            table_files_dependencies_map+=(["$1"]="$str_file_dependencies")
+            if [ "$2" = "view" ]; then
+                view_files_dependencies_map+=(["$1"]="$str_file_dependencies")                
+            else
+                table_files_dependencies_map+=(["$1"]="$str_file_dependencies")
+            fi
         fi
     fi
 
@@ -356,24 +408,47 @@ write_map_key_files() {
 
     log "Writing map key file and its dependencies - [$1]"
 
-    str_table_files_3=${table_files_dependencies_map[$1]}
-    # Save current IFS (Internal Field Separator)
-    SAVEIFS=$IFS
-    # Change IFS to newline char
-    IFS=$','
-    # split the value string into an array by the same name
-    table_files_3=($str_table_files_3)
-    # Reset IFS to before
-    IFS=$SAVEIFS
+    if [ "$2" = "table" ]; then
+        str_table_files_3=${table_files_dependencies_map[$1]}
+        # Save current IFS (Internal Field Separator)
+        SAVEIFS=$IFS
+        # Change IFS to newline char
+        IFS=$','
+        # split the value string into an array by the same name
+        table_files_3=($str_table_files_3)
+        # Reset IFS to before
+        IFS=$SAVEIFS
 
-    for (( j=0; j<${#table_files_3[@]}; j++ ))
-    do
-        log "Calling write_table_file - ${table_files_3[$j]}" 
-        write_table_file "${table_files_3[$j]}"
-    done
+        for (( j=0; j<${#table_files_3[@]}; j++ ))
+        do
+            log "Calling write_table_file - ${table_files_3[$j]}" 
+            write_table_file "${table_files_3[$j]}"
+        done
 
-    log "Calling write_table_file - $1" 
-    write_table_file "$1"
+        log "Calling write_table_file - $1" 
+        write_table_file "$1"
+    
+    else
+        str_view_files_3=${view_files_dependencies_map[$1]}
+        # Save current IFS (Internal Field Separator)
+        SAVEIFS=$IFS
+        # Change IFS to newline char
+        IFS=$','
+        # split the value string into an array by the same name
+        view_files_3=($str_view_files_3)
+        # Reset IFS to before
+        IFS=$SAVEIFS
+
+        log "Calling write_view_file - $1" 
+        write_view_file "$1"
+
+        for (( k=0; k<${#view_files_3[@]}; k++ ))
+        do
+            log "Calling write_view_file - ${view_files_3[$k]}" 
+            write_view_file "${view_files_3[$k]}"
+        done
+
+    fi
 
 }
 
@@ -385,7 +460,7 @@ is_object_exist_in_target() {
     else
         echo 1
     fi
-    
+
 }
 
 ############################################################################################
@@ -612,10 +687,15 @@ do
             log "---------------------------------------------------------------------------------------------------"
             log "Processing table file - [$file]"
 
-            map_table_file_dependencies "$file"
+            map_file_dependencies "$file" "table"
 
         elif  [[ $file = *"View"* ]]; then
-            cat "$file" >> view.tmp
+            # view also require dependency processing
+            log "---------------------------------------------------------------------------------------------------"
+            log "Processing view file - [$file]"
+
+            map_file_dependencies "$file" "view"
+
         elif  [[ $file = *"StoredProcedure"* ]]; then
             cat "$file" >> sp.tmp
         fi
@@ -664,13 +744,21 @@ if [ "$mode" = "full" ]; then
         fi
 
     done
-        
+
+    # write tables with no dependencies
+    log "Phase 0 tables - [${phase_0_tables[*]}]"
+    for (( i=0; i<${#phase_0_tables[@]}; i++ ))
+    do
+        log "Phase 0 processing table file - [${phase_0_tables[$i]}]"
+        write_table_file "${phase_0_tables[$i]}"
+    done
+
     # write tables with simple dependencies
     log "Phase 1 tables - [${phase_1_tables[*]}]"
     for (( i=0; i<${#phase_1_tables[@]}; i++ ))
     do
         log "Phase 1 processing map key table file - [${phase_1_tables[$i]}]"
-        write_map_key_files "${phase_1_tables[$i]}"
+        write_map_key_files "${phase_1_tables[$i]}" "table"
     done
 
     # write tables with multi level dependencies
@@ -678,9 +766,64 @@ if [ "$mode" = "full" ]; then
     for (( i=0; i<${#phase_2_tables[@]}; i++ ))
     do
         log "Phase 2 processing map key table file - [${phase_2_tables[$i]}]"
-        write_map_key_files "${phase_2_tables[$i]}"
+        write_map_key_files "${phase_2_tables[$i]}" "table"
     done
     
+    # iterate through the view dependency map, write view with multi dependencies last
+    for view_file in "${!view_files_dependencies_map[@]}"
+    do
+        log "---------------------------------------------------------------------------------------------------"
+        log "Processing view file - [$view_file]"
+        log "Dependencies for view file - $view_file: ${view_files_dependencies_map[$view_file]}"
+
+        str_view_files=${view_files_dependencies_map[$view_file]}
+        # Save current IFS (Internal Field Separator)
+        SAVEIFS=$IFS
+        # Change IFS to newline char
+        IFS=$','
+        # split the value string into an array by the same name
+        view_files_2=($str_view_files)
+        # Reset IFS to before
+        IFS=$SAVEIFS
+
+        phase=1
+
+        for (( i=0; i<${#view_files_2[@]}; i++ ))
+        do
+            str_map_keys=$(echo "${!view_files_dependencies_map[@]}")
+
+            if [[ "$str_map_keys" = *"${view_files_2[$i]}"* ]]; then
+                # this view has multi dependency put it on second phase
+                log "$view_file depends on map key ${view_files_2[$i]}"
+                phase=2
+                phase_2_views+=("$view_file")
+                continue
+            fi
+            
+        done
+
+        if [ $phase -eq 1 ]; then
+             phase_1_views+=("$view_file")
+        fi
+
+    done
+        
+    # write views with simple dependencies
+    log "Phase 1 views - [${phase_1_views[*]}]"
+    for (( i=0; i<${#phase_1_views[@]}; i++ ))
+    do
+        log "Phase 1 processing map key view file - [${phase_1_views[$i]}]"
+        write_map_key_files "${phase_1_views[$i]}" "view"
+    done
+
+    # write views with multi level dependencies
+    log "Phase 2 views - [${phase_2_views[*]}]"
+    for (( i=0; i<${#phase_2_views[@]}; i++ ))
+    do
+        log "Phase 2 processing map key view file - [${phase_2_views[$i]}]"
+        write_map_key_files "${phase_2_views[$i]}" "view"
+    done
+
     # write everything
     for tmp in table.tmp view.tmp sp.tmp
     do
