@@ -13,7 +13,6 @@ CREATE TABLE [dbo].[Products](
 	[UnitsOnOrder] [smallint] NULL,
 	[ReorderLevel] [smallint] NULL,
 	[Discontinued] [bit] NOT NULL,
-	[Warehouse] [int] NULL,
  CONSTRAINT [PK_Products] PRIMARY KEY CLUSTERED 
 (
 	[ProductID] ASC

@@ -11,6 +11,7 @@ phase_1_tables=()
 phase_2_tables=()
 declare -A view_files_dependencies_map=()
 processed_views=()
+phase_0_views=()
 phase_1_views=()
 phase_2_views=()
 
@@ -348,6 +349,8 @@ map_file_dependencies() {
 
         if [ "$2" = "table" ]; then
             phase_0_tables+=("$1")
+        else
+            phase_0_views+=("$1")
         fi
 
     else
@@ -807,14 +810,6 @@ if [ "$mode" = "full" ]; then
         fi
 
     done
-        
-    # write views with simple dependencies
-    log "Phase 1 views - [${phase_1_views[*]}]"
-    for (( i=0; i<${#phase_1_views[@]}; i++ ))
-    do
-        log "Phase 1 processing map key view file - [${phase_1_views[$i]}]"
-        write_map_key_files "${phase_1_views[$i]}" "view"
-    done
 
     # write views with multi level dependencies
     log "Phase 2 views - [${phase_2_views[*]}]"
@@ -824,6 +819,22 @@ if [ "$mode" = "full" ]; then
         write_map_key_files "${phase_2_views[$i]}" "view"
     done
 
+    # write views with simple dependencies
+    log "Phase 1 views - [${phase_1_views[*]}]"
+    for (( i=0; i<${#phase_1_views[@]}; i++ ))
+    do
+        log "Phase 1 processing map key view file - [${phase_1_views[$i]}]"
+        write_map_key_files "${phase_1_views[$i]}" "view"
+    done
+
+    # write views with no dependencies
+    log "Phase 1 views - [${phase_0_views[*]}]"
+    for (( i=0; i<${#phase_0_views[@]}; i++ ))
+    do
+        log "Phase 1 processing map key view file - [${phase_0_views[$i]}]"
+        write_map_key_files "${phase_0_views[$i]}" "view"
+    done
+        
     # write everything
     for tmp in table.tmp view.tmp sp.tmp
     do
