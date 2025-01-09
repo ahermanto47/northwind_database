@@ -43,4 +43,8 @@ if [ "$mode" = full ]; then
     sqlcmd -Q "create database [$database]"
 fi
 
-sqlcmd -d $database -i "./build/database.sql"
+if [ -f "./build/database.sql" ] && [ -s "./build/database.sql" ]; then
+    sqlcmd -d $database -i "./build/database.sql"
+else
+    printf "Missing ./build/database.sql file.."
+fi

@@ -1,3 +1,4 @@
 .vs
 build
-delta.txt
+build.output.txt
+deploy.output.txt
