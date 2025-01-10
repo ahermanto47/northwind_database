@@ -182,6 +182,31 @@ EOM
 
 }
 
+write_drop_statement() {
+
+    case "$4" in
+        "Table") 
+        in_object_type="table"
+        in_object_flag=3
+        ;;
+        "View") 
+        in_object_type="view"
+        in_object_flag=2
+        ;;
+        "StoredProcedure") 
+        in_object_type="procedure"
+        in_object_flag=4
+        ;;
+    esac
+
+    cat >> "$1" << EOM
+if exists (select * from sysobjects where id = object_id('$2.$3') and sysstat & 0xf = $in_object_flag)
+	drop $in_object_type "$2"."$3"
+GO
+EOM
+
+}
+
 get_definition_from_file() {
 
     result=$(sed -e '/CREATE/,/GO/!d' "$1" | sed -e 's/GO//g' | sed '/^[[:space:]]*$/d')
@@ -528,6 +553,10 @@ do
     if [ "$mode" = "delta" ]; then
         # we look for differences from repo vs target
 
+        # initialize
+        echo "SET NOCOUNT ON" >> database.sql 2>&1
+        echo "GO"  >> database.sql 2>&1
+
         # first we get table info
         if [ "$object_type" = "Table" ]; then
 
@@ -690,6 +719,7 @@ do
             log "---------------------------------------------------------------------------------------------------"
             log "Processing table file - [$file]"
 
+            write_drop_statement "drop_table.tmp" "$object_schema" "$object_name" "$object_type"
             map_file_dependencies "$file" "table"
 
         elif  [[ $file = *"View"* ]]; then
@@ -697,9 +727,11 @@ do
             log "---------------------------------------------------------------------------------------------------"
             log "Processing view file - [$file]"
 
+            write_drop_statement "drop_view.tmp" "$object_schema" "$object_name" "$object_type"
             map_file_dependencies "$file" "view"
 
         elif  [[ $file = *"StoredProcedure"* ]]; then
+            write_drop_statement "drop_sp.tmp" "$object_schema" "$object_name" "$object_type"
             cat "$file" >> sp.tmp
         fi
 
@@ -828,15 +860,22 @@ if [ "$mode" = "full" ]; then
     done
 
     # write views with no dependencies
-    log "Phase 1 views - [${phase_0_views[*]}]"
+    log "Phase 0 views - [${phase_0_views[*]}]"
     for (( i=0; i<${#phase_0_views[@]}; i++ ))
     do
-        log "Phase 1 processing map key view file - [${phase_0_views[$i]}]"
+        log "Phase 0 processing map key view file - [${phase_0_views[$i]}]"
         write_map_key_files "${phase_0_views[$i]}" "view"
     done
         
     # write everything
-    for tmp in table.tmp view.tmp sp.tmp
+    
+    # initialize
+    echo "SET NOCOUNT ON" >> database.sql 2>&1
+    echo "GO" >> database.sql 2>&1
+    echo "SET QUOTED_IDENTIFIER ON" >> database.sql 2>&1 
+    echo "GO" >> database.sql 2>&1
+
+    for tmp in drop_sp.tmp drop_view.tmp drop_table.tmp table.tmp view.tmp sp.tmp
     do
         cat $tmp >> database.sql 2>&1
     done
